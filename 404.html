@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script>
+// Preserve query params across GitHub Pages redirect
+var qs = window.location.search;
+var hash = window.location.hash;
+if (qs || hash) {
+  try { localStorage.setItem('viva_qs_raw', qs || hash); } catch(e) {}
+}
+window.location.replace('/pos/' + (qs||'') + (hash||''));
+</script>
+</head>
+<body>Redirecting...</body>
+</html>
