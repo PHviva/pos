@@ -608,9 +608,9 @@
   }
   #receiptOverlay.active { display:flex; }
   .receipt-paper {
-    flex:1; width:100%; display:flex;
-    align-items:flex-start; justify-content:center;
-    overflow:hidden;
+    flex:1; width:100%; max-width:440px;
+    display:flex; align-items:flex-start; justify-content:center;
+    overflow:hidden; background:#fff;
   }
   .receipt-close-btn {
     width:100%; padding:15px; background:#0a84ff; color:#fff;
@@ -880,7 +880,7 @@ function applyApiTx(d){
     message:         d.message         || prev.message          || '',
     cardNumber:      d.cardNumber      || prev.cardNumber       || '',
     cardTypeName:    d.bankId          || d.cardType            || prev.cardTypeName || '',
-    panEntryMode:    d.panEntryMode    || prev.panEntryMode     || '',
+    panEntryMode:    (d.panEntryMode!=null&&String(d.panEntryMode)!==''&&String(d.panEntryMode)!=='0') ? String(d.panEntryMode) : (prev.panEntryMode || ''),
     typeId:          String(d.typeId   || prev.typeId           || '5'),
     transactionDate: d.insDate         || d.transactionDate     || prev.transactionDate || '',
     orderCode:       String(d.orderCode || prev.orderCode       || ''),
@@ -891,7 +891,7 @@ function applyApiTx(d){
     sourceCode:      String(d.sourceCode || prev.sourceCode     || SRC),
     eventId:         String(d.eventId  || prev.eventId          || '0'),
     aid:             d.applicationIdentifier || d.aid           || prev.aid || '',
-    cardIssuingBank: d.cardIssuingBank || prev.cardIssuingBank  || ''
+    cardIssuingBank: d.cardIssuingBank || d.IssuingBank || d.issuingBank || prev.cardIssuingBank || ''
   };
   saveLast(); updateBar();
 }
@@ -1007,11 +1007,18 @@ function glLogo(t){
   return IMG_VISA;
 }
 function glEntry(v){
-  var s=(v||'').toLowerCase();
-  if(s.indexOf('contactless')!==-1||s.indexOf('no cvm')!==-1||s.indexOf('sans contact')!==-1||s==='07') return 'SANS CONTACT EMV';
-  if(s.indexOf('chip')!==-1||s.indexOf('puce')!==-1||s==='05') return 'PUCE EMV';
-  if(s.indexOf('swipe')!==-1||s.indexOf('magnet')!==-1||s==='02') return 'BANDE MAGNETIQUE';
-  if(s==='01') return 'SAISIE MANUELLE';
+  var s=(v||'').toString().trim().toLowerCase();
+  // Numeric codes from REST API
+  if(s==='07'||s==='7') return 'SANS CONTACT EMV';
+  if(s==='05'||s==='5') return 'PUCE EMV';
+  if(s==='02'||s==='2') return 'BANDE MAGNETIQUE';
+  if(s==='01'||s==='1') return 'SAISIE MANUELLE';
+  if(s==='91'||s==='90') return 'SANS CONTACT EMV';
+  // Text values from interapp callback
+  if(s.indexOf('contactless')!==-1||s.indexOf('no cvm')!==-1||s.indexOf('sans contact')!==-1) return 'SANS CONTACT EMV';
+  if(s.indexOf('chip')!==-1||s.indexOf('contact')!==-1||s.indexOf('puce')!==-1||s.indexOf('insert')!==-1) return 'PUCE EMV';
+  if(s.indexOf('swipe')!==-1||s.indexOf('magnet')!==-1||s.indexOf('bande')!==-1) return 'BANDE MAGNETIQUE';
+  if(s.indexOf('manual')!==-1||s.indexOf('keyed')!==-1||s.indexOf('manuelle')!==-1) return 'SAISIE MANUELLE';
   return v?v.toUpperCase():'';
 }
 function glType(a){
@@ -1056,121 +1063,123 @@ function renderReceipt(){
   var ok = L.statusId==='F' || L.statusRaw==='success' || (!L.statusRaw&&!L.statusId);
   var pan       = glMask(L.cardNumber||'');
   var ent       = glEntry(L.panEntryMode||'');
-  var ctless    = ent.indexOf('CONTACT')!==-1;
+  var ctless    = ent==='SANS CONTACT EMV';
+  var chip      = ent==='PUCE EMV';
   var type      = glType(L.typeId);
   var typeNum   = glTypeNum(L.typeId);
-  var amtFmt    = (L.amount!=null ? (L.amount/100).toFixed(2).replace('.',',') : '-')+' EUR';
+  var amtFmt    = (L.amount!=null?(L.amount/100).toFixed(2).replace('.',','):'-')+' EUR';
   var date      = glDate(L.transactionDate);
   var src       = (L.sourceCode||SRC)+'/Main Store';
-  var statusDisp= ok ? 'F — APPROUVÉ' : 'A — REFUSÉ';
+  var statusDisp= ok?'F — APPROUVÉ':'A — REFUSÉ';
   var cardName  = (L.cardTypeName||'').toUpperCase()
                    .replace('NET_','').replace('DEBIT ','').replace('CREDIT ','').trim()
-                   || (glLogo(L.cardTypeName)===IMG_VISA?'VISA'
-                      :glLogo(L.cardTypeName)===IMG_MC?'MASTERCARD':'CB');
+                 ||(glLogo(L.cardTypeName)===IMG_VISA?'VISA'
+                   :glLogo(L.cardTypeName)===IMG_MC?'MASTERCARD':'CB');
   var qr = 'https://api.qrserver.com/v1/create-qr-code/?size=90x90&data='
     +encodeURIComponent('https://qr.vivapayments.com/transaction/'+(L.transactionId||'GDIMMO'));
 
-  // Use a scaled container: write receipt at 360px wide reference,
-  // then CSS scale to fit the actual viewport width.
-  // This guarantees nothing is cut off and no scroll is needed.
-  var h = '';
-  h += '<div id="rcpt-inner" style="'
-     + 'width:360px;background:#fff;color:#111;font-family:Arial,sans-serif;'
-     + 'transform-origin:top center;'  // JS will set transform:scale() after insert
-     + '">';
+  // Render at 340px reference width, then scale to fit screen
+  var h='';
+  h+='<div id="rcpt-inner" style="width:340px;background:#fff;color:#111;font-family:Arial,sans-serif;transform-origin:top center;">';
 
-  // ── HEADER ─────────────────────────────────────────────────────────────────
-  h += '<div style="text-align:center;padding:10px 12px 7px;border-bottom:1px solid #e0e0e0">';
-  h += '<div style="font-size:19px;font-weight:900;letter-spacing:.04em">GDIMMO</div>';
-  h += '<div style="font-size:10.5px;font-weight:700;letter-spacing:.08em;color:#333;margin-top:2px">REÇU DU CLIENT</div>';
-  h += '<div style="font-size:10.5px;color:#555;margin-top:2px">'+date+'</div>';
-  // Status badge
-  h += '<div style="display:inline-flex;align-items:center;gap:5px;border:1.5px solid '+(ok?'#22a045':'#cc2a20')+';border-radius:16px;padding:3px 10px;margin-top:4px;font-size:10px;font-weight:700;color:'+(ok?'#155724':'#7b0000')+';background:'+(ok?'#e6ffe9':'#ffe6e6')+'">'
-     + '<div style="width:6px;height:6px;border-radius:50%;background:'+(ok?'#22a045':'#cc2a20')+'"></div>'
-     + (ok?'APPROUVÉ &middot; STATUSID: F':'REFUSÉ &middot; STATUSID: A')+'</div>';
-  h += '</div>';
+  // ── HEADER ──────────────────────────────────────────────────────────────────
+  h+='<div style="text-align:center;padding:10px 10px 7px;border-bottom:1px solid #ddd">';
+  h+='<div style="font-size:20px;font-weight:900;letter-spacing:.04em;line-height:1.1">GDIMMO</div>';
+  h+='<div style="font-size:10px;font-weight:700;letter-spacing:.1em;color:#333;margin-top:3px">REÇU DU CLIENT</div>';
+  h+='<div style="font-size:10px;color:#555;margin-top:2px">'+date+'</div>';
+  h+='<div style="display:inline-flex;align-items:center;gap:5px;border:1.5px solid '+(ok?'#22a045':'#cc2a20')+';border-radius:14px;padding:3px 9px;margin-top:5px;font-size:9.5px;font-weight:700;color:'+(ok?'#155724':'#7b0000')+';background:'+(ok?'#e6ffe9':'#ffe6e6')+'">'
+    +'<div style="width:6px;height:6px;border-radius:50%;background:'+(ok?'#22a045':'#cc2a20')+'"></div>'
+    +(ok?'APPROUVÉ &middot; STATUSID: F':'REFUSÉ &middot; STATUSID: A')+'</div>';
+  h+='</div>';
 
-  // ── CARD + AMOUNT ──────────────────────────────────────────────────────────
-  h += '<div style="text-align:center;padding:7px 12px 7px;border-bottom:1px solid #e0e0e0">';
-  h += '<img src="'+glLogo(L.cardTypeName)+'" style="height:26px;object-fit:contain;display:block;margin:0 auto 3px" alt="card">';
-  if(pan) h += '<div style="font-size:13px;letter-spacing:.13em;font-weight:700;font-family:monospace;margin-bottom:3px">'+pan+'</div>';
-  h += '<div style="font-size:11px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:#222">'+type+'</div>';
-  h += '<div style="font-size:28px;font-weight:900;letter-spacing:-.01em;line-height:1.1;margin:2px 0 5px">'+amtFmt+'</div>';
+  // ── CARD + AMOUNT ────────────────────────────────────────────────────────────
+  h+='<div style="text-align:center;padding:7px 10px 7px;border-bottom:1px solid #ddd">';
+  h+='<img src="'+glLogo(L.cardTypeName)+'" style="height:26px;object-fit:contain;display:block;margin:0 auto 3px" alt="card">';
+  if(pan) h+='<div style="font-size:12.5px;letter-spacing:.12em;font-weight:700;font-family:monospace;margin-bottom:3px">'+pan+'</div>';
+  h+='<div style="font-size:11px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:#222">'+type+'</div>';
+  h+='<div style="font-size:28px;font-weight:900;letter-spacing:-.01em;line-height:1.15;margin:2px 0 5px">'+amtFmt+'</div>';
   if(ent){
-    h += '<div style="font-size:10.5px;font-weight:700;color:#111;margin-bottom:3px">'+ent+'</div>';
+    h+='<div style="font-size:10px;font-weight:700;color:#111;margin-bottom:3px">'+ent+'</div>';
     if(ctless){
-      h += '<img src="'+IMG_CONTACTLESS+'" style="height:38px;object-fit:contain;display:block;margin:0 auto" alt="">';
-    } else {
-      h += '<img src="'+IMG_CARDINSERT+'" style="height:26px;object-fit:contain;filter:brightness(0);opacity:.7;display:block;margin:0 auto" alt="">';
+      h+='<img src="'+IMG_CONTACTLESS+'" style="height:36px;object-fit:contain;display:block;margin:0 auto" alt="">';
+    } else if(chip){
+      h+='<img src="'+IMG_CARDINSERT+'" style="height:26px;object-fit:contain;filter:brightness(0);opacity:.7;display:block;margin:0 auto" alt="">';
     }
   }
-  h += '</div>';
+  h+='</div>';
 
-  // ── REFERENCE GRID ─────────────────────────────────────────────────────────
-  h += '<div style="padding:5px 12px;border-bottom:1px solid #e0e0e0;display:grid;grid-template-columns:1fr 1fr;gap:0 6px;font-size:9px;line-height:1.65">';
+  // ── REFERENCE GRID ───────────────────────────────────────────────────────────
+  h+='<div style="padding:5px 10px;border-bottom:1px solid #ddd;display:grid;grid-template-columns:1fr 1fr;gap:0 6px;font-size:8.5px;line-height:1.65">';
   var lc='',rc='';
   if(L.referenceNumber) lc+='STAN: '+L.referenceNumber+'<br>';
   if(L.rrn)             lc+='RRN: '+L.rrn+'<br>';
   if(L.aid)             lc+='AID: '+L.aid+'<br>';
-  if(L.orderCode)       lc+='Code commande: '+L.orderCode+'<br>';
-  if(L.transactionId)   lc+='<span style="font-size:8px;color:#888">ID: '+L.transactionId+'</span>';
+  if(L.orderCode)       lc+='Code commande:<br><span style="font-size:8px">'+L.orderCode+'</span><br>';
+  // Transaction ID on ONE line — truncate if needed
+  if(L.transactionId)   lc+='<span style="font-size:7.5px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:160px">ID: '+L.transactionId+'</span>';
   if(L.terminalId)      rc+='TID: '+L.terminalId+'<br>';
   if(L.authorizationId) rc+='AUTH: '+L.authorizationId+'<br>';
   rc+='SRC: '+src;
-  h += '<div>'+lc+'</div><div style="text-align:right">'+rc+'</div>';
-  h += '</div>';
+  h+='<div style="overflow:hidden">'+lc+'</div><div style="text-align:right">'+rc+'</div>';
+  h+='</div>';
 
-  // ── DÉTAILS COMPLETS ────────────────────────────────────────────────────────
-  h += '<div style="padding:5px 12px 5px">';
-  h += '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:#111;font-weight:900;margin-bottom:3px">DÉTAILS COMPLETS</div>';
+  // ── DÉTAILS COMPLETS ─────────────────────────────────────────────────────────
+  h+='<div style="padding:4px 10px 5px">';
+  h+='<div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.12em;color:#111;font-weight:900;margin-bottom:3px">DÉTAILS COMPLETS</div>';
   var rows=[
-    ['N° carte',         pan],
-    ['Banque émettrice', L.cardIssuingBank||'—'],
-    ['Approbation acqu.',     ok?'✓ Approuvé':'× Refusé'],
-    ['Event ID',              L.eventId||'0'],
-    ['Type de carte',         cardName],
-    ['Devise',                'EUR (EUR)'],
-    ['Type opération',   type+' (typeId:'+typeNum+')'],
-    ['StatusId',              statusDisp],
-    ['Date',                  date],
-    ['Mode de saisie',        ent||'—']
+    ['N° carte',        pan],
+    ['Banque émettrice',L.cardIssuingBank&&L.cardIssuingBank!==''?L.cardIssuingBank:'—'],
+    ['Approbation acqu.',    ok?'✓ Approuvé':'× Refusé'],
+    ['Event ID',             L.eventId||'0'],
+    ['Type de carte',        cardName],
+    ['Devise',               'EUR (EUR)'],
+    ['Type opération',  type+' (typeId:'+typeNum+')'],
+    ['StatusId',             statusDisp],
+    ['Date',                 date],
+    ['Mode de saisie',       ent||'—']
   ];
-  h += '<div style="font-size:9px">';
+  h+='<div style="font-size:8.5px">';
   rows.forEach(function(r){
     if(!r[1])return;
-    h += '<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px dotted #e8e8e8;line-height:1.75">'
-       + '<span style="color:#444;flex-shrink:0;padding-right:4px">'+r[0]+'</span>'
-       + '<span style="font-weight:600;text-align:right;word-break:break-all;color:#111">'+r[1]+'</span>'
-       + '</div>';
+    h+='<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px dotted #e8e8e8;line-height:1.6">'
+      +'<span style="color:#444;flex-shrink:0;padding-right:4px">'+r[0]+'</span>'
+      +'<span style="font-weight:600;text-align:right;word-break:break-all;color:#111">'+r[1]+'</span>'
+      +'</div>';
   });
-  h += '</div></div>';
+  h+='</div></div>';
 
-  // ── QR + LOGO FOOTER ────────────────────────────────────────────────────────
-  h += '<div style="text-align:center;padding:6px 12px 8px;border-top:1px solid #e0e0e0">';
-  h += '<img src="'+qr+'" width="80" height="80" alt="QR" style="border:1px solid #ddd;border-radius:3px;padding:3px;display:block;margin:0 auto 6px">';
-  // Viva logo: dark navy image on white paper — no filter, just opacity to grey it slightly
-  h += '<img src="'+IMG_VIVA+'" style="height:22px;object-fit:contain;opacity:.6;display:inline-block" alt="viva.com">';
-  h += '</div>';
+  // ── QR + VIVA FOOTER ─────────────────────────────────────────────────────────
+  h+='<div style="text-align:center;padding:6px 10px 8px;border-top:1px solid #ddd">';
+  h+='<img src="'+qr+'" width="82" height="82" alt="QR" style="border:1px solid #ddd;border-radius:3px;padding:3px;display:block;margin:0 auto 6px">';
+  // Viva logo: bigger, use opacity to show navy colour correctly on white
+  h+='<img src="'+IMG_VIVA+'" style="height:32px;object-fit:contain;opacity:.55;display:inline-block" alt="viva.com">';
+  h+='</div>';
 
-  h += '</div>'; // end rcpt-inner
+  h+='</div>'; // end rcpt-inner
 
-  document.getElementById('receiptPaper').innerHTML = h;
+  document.getElementById('receiptPaper').innerHTML=h;
 
-  // Scale to fit viewport height (minus close button ~52px)
+  // Scale to fit viewport — header must never be cut
   requestAnimationFrame(function(){
-    var inner = document.getElementById('rcpt-inner');
-    if(!inner) return;
-    var availH = window.innerHeight - 52; // 52px = close button
-    var availW = window.innerWidth;
-    var naturalH = inner.scrollHeight;
-    var scaleH = availH / naturalH;
-    var scaleW = availW / 360;
-    var scale = Math.min(scaleH, scaleW, 1); // never upscale
-    inner.style.transform = 'scale('+scale+')';
-    inner.style.width = '360px';
-    // Center horizontally
-    inner.style.marginLeft = 'auto';
-    inner.style.marginRight = 'auto';
+    var inner=document.getElementById('rcpt-inner');
+    if(!inner)return;
+    var closeH=52;
+    var availH=window.innerHeight-closeH;
+    var availW=Math.min(window.innerWidth,440);
+    var scaleW=availW/340;
+    // Apply width scale first to get accurate height
+    inner.style.transform='scale('+scaleW+')';
+    // Now check height
+    var scaledH=inner.scrollHeight*scaleW;
+    var scale=scaleW;
+    if(scaledH>availH){
+      scale=availH/inner.scrollHeight;
+    }
+    scale=Math.min(scale,1);
+    inner.style.transform='scale('+scale+')';
+    // Adjust paper height so close button is flush
+    var paper=document.getElementById('receiptPaper')||inner.parentNode;
+    if(paper) paper.style.height=(inner.scrollHeight*scale)+'px';
   });
 
   document.getElementById('receiptOverlay').classList.add('active');
