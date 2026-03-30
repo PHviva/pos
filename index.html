@@ -841,7 +841,8 @@ function applyTx(p, knownAmt){
     eventId:         p.transactionEventId || prev.eventId        || '0',
     aid:             p.aid              || prev.aid              || '',
     paymentMethod:   p.paymentMethod    || prev.paymentMethod    || '',
-    cardIssuingBank: p.issuingBank      || prev.cardIssuingBank  || ''
+    cardIssuingBank: p.issuingBank || p.cardIssuingBank || prev.cardIssuingBank || '',
+    cardCountryCode: p.cardCountryCode || prev.cardCountryCode || ''
   };
   saveLast(); updateBar();
   return LAST;
@@ -849,7 +850,7 @@ function applyTx(p, knownAmt){
 
 // ── REST API — fetch transaction details (works on https://) ───────────────
 function fetchTxDetails(transactionId, callback){
-  var url = 'https://api.vivapayments.com/checkout/v2/transactions/' + transactionId;
+  var url = 'https://api.vivapayments.com/api/transactions/' + transactionId;
   var xhr = new XMLHttpRequest();
   xhr.open('GET', url, true);
   xhr.setRequestHeader('Authorization', 'Basic ' + btoa(MID + ':' + AKEY));
@@ -872,26 +873,27 @@ function applyApiTx(d){
   if(!d) return;
   var prev = LAST || {};
   LAST = {
-    transactionId:   d.transactionId   || prev.transactionId   || '',
-    amount:          d.amount          || prev.amount           || 0,
+    transactionId:   d.TransactionId   || d.transactionId   || prev.transactionId   || '',
+    amount:          d.Amount          || d.amount          || prev.amount           || 0,
     tipAmount:       d.tipAmount       || 0,
-    statusRaw:       d.statusId==='F'  ? 'success' : 'fail',
-    statusId:        d.statusId        || prev.statusId         || 'F',
+    statusRaw:       (d.StatusId==='F'||d.statusId==='F') ? 'success' : 'fail',
+    statusId:        d.StatusId        || d.statusId        || prev.statusId         || 'F',
     message:         d.message         || prev.message          || '',
-    cardNumber:      d.cardNumber      || prev.cardNumber       || '',
-    cardTypeName:    d.bankId          || d.cardType            || prev.cardTypeName || '',
+    cardNumber:      d.CardNumber      || d.cardNumber      || prev.cardNumber       || '',
+    cardTypeName:    d.CardType        || d.cardType        || d.bankId             || prev.cardTypeName || '',
     panEntryMode:    (d.panEntryMode!=null&&String(d.panEntryMode)!==''&&String(d.panEntryMode)!=='0') ? String(d.panEntryMode) : (prev.panEntryMode || ''),
-    typeId:          String(d.typeId   || prev.typeId           || '5'),
-    transactionDate: d.insDate         || d.transactionDate     || prev.transactionDate || '',
-    orderCode:       String(d.orderCode || prev.orderCode       || ''),
-    authorizationId: d.authorizationId || prev.authorizationId  || '',
+    typeId:          String(d.TransactionTypeId || d.transactionTypeId || d.typeId  || prev.typeId || '5'),
+    transactionDate: d.InsDate         || d.insDate         || d.transactionDate    || prev.transactionDate || '',
+    orderCode:       String(d.OrderCode || d.orderCode       || prev.orderCode       || ''),
+    authorizationId: d.AuthorizationId || d.authorizationId || prev.authorizationId  || '',
     referenceNumber: d.retrievalReferenceNumber || prev.referenceNumber || '',
-    rrn:             d.retrievalReferenceNumber || prev.rrn     || '',
-    terminalId:      String(d.terminalId || prev.terminalId     || '16008507'),
-    sourceCode:      String(d.sourceCode || prev.sourceCode     || SRC),
-    eventId:         String(d.eventId  || prev.eventId          || '0'),
-    aid:             d.applicationIdentifier || d.aid           || prev.aid || '',
-    cardIssuingBank: d.cardIssuingBank || d.issuingBank || d.IssuingBank || d.bankName || d.cardIssuingBankName || prev.cardIssuingBank || ''
+    rrn:             d.RetrievalReferenceNumber || d.retrievalReferenceNumber || prev.rrn || '',
+    terminalId:      String(d.TerminalId || d.terminalId   || prev.terminalId       || '16008507'),
+    sourceCode:      String(d.SourceCode || d.sourceCode   || prev.sourceCode       || SRC),
+    eventId:         String(d.EventId  || d.eventId        || prev.eventId          || '0'),
+    aid:             d.ApplicationIdentifier || d.applicationIdentifier || d.aid   || prev.aid || '',
+    cardIssuingBank: d.CardIssuingBank || d.cardIssuingBank || d.issuingBank || prev.cardIssuingBank || '',
+    cardCountryCode: d.CardCountryCode || d.cardCountryCode || prev.cardCountryCode || ''
   };
   // Debug: log all API fields to console
   try{console.log('[Viva API]',JSON.stringify(d));}catch(e){}
@@ -1130,6 +1132,7 @@ function renderReceipt(){
   var rows=[
     ['N° carte',        pan],
     ['Banque émettrice',L.cardIssuingBank&&L.cardIssuingBank!==''?L.cardIssuingBank:'—'],
+    ['Pays carte',L.cardCountryCode&&L.cardCountryCode!==''?L.cardCountryCode:'—'],
     ['Approbation acqu.',    ok?'✓ Approuvé':'× Refusé'],
     ['Event ID',             L.eventId||'0'],
     ['Type de carte',        cardName],
