@@ -891,8 +891,10 @@ function applyApiTx(d){
     sourceCode:      String(d.sourceCode || prev.sourceCode     || SRC),
     eventId:         String(d.eventId  || prev.eventId          || '0'),
     aid:             d.applicationIdentifier || d.aid           || prev.aid || '',
-    cardIssuingBank: d.cardIssuingBank || d.IssuingBank || d.issuingBank || prev.cardIssuingBank || ''
+    cardIssuingBank: d.cardIssuingBank || d.issuingBank || d.IssuingBank || d.bankName || d.cardIssuingBankName || prev.cardIssuingBank || ''
   };
+  // Debug: log all API fields to console
+  try{console.log('[Viva API]',JSON.stringify(d));}catch(e){}
   saveLast(); updateBar();
 }
 
@@ -1075,8 +1077,7 @@ function renderReceipt(){
                    .replace('NET_','').replace('DEBIT ','').replace('CREDIT ','').trim()
                  ||(glLogo(L.cardTypeName)===IMG_VISA?'VISA'
                    :glLogo(L.cardTypeName)===IMG_MC?'MASTERCARD':'CB');
-  var qr = 'https://api.qrserver.com/v1/create-qr-code/?size=90x90&data='
-    +encodeURIComponent('https://qr.vivapayments.com/transaction/'+(L.transactionId||'GDIMMO'));
+  var qr = 'https://api.qrserver.com/v1/create-qr-code/?size=90x90&data='+encodeURIComponent(L.transactionId||'GDIMMO');
 
   // Render at 340px reference width, then scale to fit screen
   var h='';
@@ -1114,9 +1115,9 @@ function renderReceipt(){
   if(L.referenceNumber) lc+='STAN: '+L.referenceNumber+'<br>';
   if(L.rrn)             lc+='RRN: '+L.rrn+'<br>';
   if(L.aid)             lc+='AID: '+L.aid+'<br>';
-  if(L.orderCode)       lc+='Code commande:<br><span style="font-size:8px">'+L.orderCode+'</span><br>';
+  if(L.orderCode)       lc+='orderCode: '+L.orderCode+'<br>';
   // Transaction ID on ONE line — truncate if needed
-  if(L.transactionId)   lc+='<span style="font-size:7.5px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:160px">ID: '+L.transactionId+'</span>';
+  if(L.transactionId)   lc+='<span style="font-size:7.5px;color:#888;word-break:break-all;display:block">ID: '+L.transactionId+'</span>';
   if(L.terminalId)      rc+='TID: '+L.terminalId+'<br>';
   if(L.authorizationId) rc+='AUTH: '+L.authorizationId+'<br>';
   rc+='SRC: '+src;
