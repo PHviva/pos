@@ -854,20 +854,29 @@ function applyTx(p, knownAmt){
 // This is the only Viva endpoint that reliably returns IssuingBank for POS.
 function fetchTxDetails(transactionId, callback){
   if(!transactionId){ callback(null); return; }
-  var xhr = new XMLHttpRequest();
-  xhr.open('GET', 'https://api.vivapayments.com/api/transactions/' + transactionId, true);
-  xhr.setRequestHeader('Authorization', 'Basic ' + btoa(MID + ':' + AKEY));
-  xhr.timeout = 8000;
-  xhr.onreadystatechange = function(){
-    if(xhr.readyState !== 4) return;
-    if(xhr.status === 200){
-      try{ callback(JSON.parse(xhr.responseText)); return; }catch(e){}
-    }
-    log('API erreur ' + xhr.status, 'warn');
-    callback(null);
-  };
-  xhr.onerror = xhr.ontimeout = function(){ callback(null); };
-  xhr.send();
+  var auth = 'Basic ' + btoa(MID + ':' + AKEY);
+  var results = {}, count = 0;
+  function done(key, data){
+    if(data) results[key] = data;
+    if(++count === 2) callback(Object.keys(results).length ? results : null);
+  }
+  function get(key, url){
+    var x = new XMLHttpRequest();
+    x.open('GET', url, true);
+    x.setRequestHeader('Authorization', auth);
+    x.timeout = 8000;
+    x.onreadystatechange = function(){
+      if(x.readyState !== 4) return;
+      try{ done(key, x.status===200 ? JSON.parse(x.responseText) : null); }
+      catch(e){ done(key, null); }
+    };
+    x.onerror = x.ontimeout = function(){ done(key, null); };
+    x.send();
+  }
+  // OLD API: has CreditCard.IssuingBank, CreditCard.CardCountryCode
+  get('old', 'https://api.vivapayments.com/api/transactions/' + transactionId);
+  // v2 API: has cardIssuingBank (sometimes populated), cardCountryCode
+  get('v2',  'https://api.vivapayments.com/checkout/v2/transactions/' + transactionId);
 }
 
 // Map GET /api/transactions/{id} response to LAST.
@@ -876,14 +885,17 @@ function fetchTxDetails(transactionId, callback){
 //   TerminalId, AuthorizationId, RetrievalReferenceNumber, PanEntryMode,
 //   ApplicationIdentifier, TransactionTypeId, EventId
 //   CreditCard: { CardNumber, CardCountryCode, IssuingBank, ... }
-function applyApiTx(d){
-  if(!d) return;
+function applyApiTx(res){
+  if(!res) return;
   var prev = LAST || {};
-  var cc   = d.CreditCard || {};   // Nested CreditCard object
+  // res peut être {old:..., v2:...} (dual) ou directement un objet (legacy)
+  var d  = res.old || res || {};   // OLD API response
+  var d2 = res.v2  || {};          // v2 API response
+  var cc = d.CreditCard || {};     // CreditCard object in OLD API
 
   // IssuingBank comes from CreditCard.IssuingBank
-  var issuingBank = cc.IssuingBank || cc.issuingBank || d.CardIssuingBank || prev.cardIssuingBank || '';
-  var countryCode = cc.CardCountryCode || cc.cardCountryCode || d.CardCountryCode || prev.cardCountryCode || '';
+  var issuingBank = cc.IssuingBank || cc.issuingBank || d.CardIssuingBank || d2.cardIssuingBank || prev.cardIssuingBank || '';
+  var countryCode = cc.CardCountryCode || cc.cardCountryCode || d.CardCountryCode || d2.cardCountryCode || prev.cardCountryCode || '';
 
   LAST = {
     transactionId:   d.TransactionId        || prev.transactionId   || '',
@@ -905,10 +917,14 @@ function applyApiTx(d){
     sourceCode:      String(d.SourceCode    || prev.sourceCode       || SRC),
     eventId:         String(d.EventId       || prev.eventId          || '0'),
     aid:             d.ApplicationIdentifier|| prev.aid              || '',
-    cardIssuingBank: issuingBank,
-    cardCountryCode: countryCode
+    cardIssuingBank: issuingBank || d2.cardIssuingBank || '',
+    cardCountryCode: countryCode || d2.cardCountryCode || ''
   };
-  try{ console.log('[Viva API response]', JSON.stringify(d)); }catch(e){}
+  try{
+    console.log('[Viva API response]', JSON.stringify(d));
+    // Store raw response for display on receipt
+    LAST._apiRaw = 'old:'+JSON.stringify(d).slice(0,150)+' | v2:'+JSON.stringify(d2).slice(0,150);
+  }catch(e){}
   saveLast(); updateBar();
 }
 
@@ -1131,12 +1147,13 @@ function renderReceipt(){
   if(L.aid)             lc+='AID: '+L.aid+'<br>';
   if(L.orderCode)       lc+='orderCode: '+L.orderCode+'<br>';
   // Transaction ID on ONE line — truncate if needed
-  if(L.transactionId)   lc+='<span style="font-size:7.5px;color:#888;word-break:break-all;display:block">ID: '+L.transactionId+'</span>';
+  var _tid = L.transactionId || '';
   if(L.terminalId)      rc+='TID: '+L.terminalId+'<br>';
   if(L.authorizationId) rc+='AUTH: '+L.authorizationId+'<br>';
   rc+='SRC: '+src;
   h+='<div style="overflow:hidden">'+lc+'</div><div style="text-align:right">'+rc+'</div>';
   h+='</div>';
+  if(_tid) h+='<div style="font-size:8px;color:#888;padding:2px 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">ID: '+_tid+'</div>';
 
   // ── DÉTAILS COMPLETS ─────────────────────────────────────────────────────────
   h+='<div style="padding:4px 10px 5px">';
