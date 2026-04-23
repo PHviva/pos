@@ -659,7 +659,7 @@
       <span class="btn-icon">🔐</span>
       <span class="btn-label">Pré-Auth</span>
     </button>
-    <button class="btn-tx btn-receipt" onclick="doReceipt()">
+    <button class="btn-tx btn-receipt" onclick="doReceipt()" id="btnReceipt">
       <span class="btn-icon">🧾</span>
       <span class="btn-label">Reçu</span>
     </button>
@@ -856,10 +856,18 @@ function fetchTxDetails(transactionId, callback){
   if(!transactionId){ callback(null); return; }
   var auth = 'Basic ' + btoa(MID + ':' + AKEY);
   var results = {}, count = 0, total = 3;
-  function done(key, data){
-    if(data) results[key] = data;
-    if(++count === total) callback(Object.keys(results).length ? results : null);
+
+  function done(key, data, raw){
+    results[key] = {data: data, raw: raw, status: data?'OK':'FAIL'};
+    if(++count === total){
+      // Show raw responses in debug panel
+      showDebug(results);
+      var merged = {};
+      for(var k in results){ if(results[k].data) merged[k] = results[k].data; }
+      callback(Object.keys(merged).length ? merged : null);
+    }
   }
+
   function get(key, url){
     var x = new XMLHttpRequest();
     x.open('GET', url, true);
@@ -867,26 +875,47 @@ function fetchTxDetails(transactionId, callback){
     x.timeout = 8000;
     x.onreadystatechange = function(){
       if(x.readyState !== 4) return;
-      var parsed = null;
-      if(x.status === 200){
-        try{ parsed = JSON.parse(x.responseText); }catch(e){}
-      }
-      console.log('[Viva '+key+'] status='+x.status+' body='+x.responseText.slice(0,300));
-      done(key, parsed);
+      var parsed = null, raw = x.responseText.slice(0,500);
+      if(x.status === 200){ try{ parsed = JSON.parse(x.responseText); }catch(e){} }
+      done(key, parsed, 'HTTP '+x.status+': '+raw);
     };
-    x.onerror = x.ontimeout = function(){
-      console.log('[Viva '+key+'] error/timeout');
-      done(key, null);
-    };
+    x.onerror   = function(){ done(key, null, 'NETWORK ERROR'); };
+    x.ontimeout = function(){ done(key, null, 'TIMEOUT'); };
     x.send();
   }
-  // Three endpoints to maximise chances of getting IssuingBank
-  // 1. OLD endpoint — may return CreditCard.IssuingBank
-  get('old', 'https://api.vivapayments.com/api/transactions/' + transactionId);
-  // 2. v2 checkout — may return cardIssuingBank
-  get('v2',  'https://api.vivapayments.com/checkout/v2/transactions/' + transactionId);
-  // 3. OLD list endpoint with transactionId param — alternate format
-  get('list','https://api.vivapayments.com/api/transactions?transactionId=' + transactionId);
+
+  get('old',  'https://api.vivapayments.com/api/transactions/' + transactionId);
+  get('v2',   'https://api.vivapayments.com/checkout/v2/transactions/' + transactionId);
+  get('list', 'https://api.vivapayments.com/api/transactions?transactionId=' + transactionId);
+}
+
+function showDebug(results){
+  var p = document.getElementById('debugPanel');
+  if(!p) return;
+  var html = '';
+  ['old','v2','list'].forEach(function(k){
+    var r = results[k] || {};
+    html += '=== '+k.toUpperCase()+' ['+r.status+'] ===\n';
+    if(r.data){
+      // Pretty print key fields
+      var d = r.data;
+      // Check for nested CreditCard
+      if(d.CreditCard) html += 'CreditCard: '+JSON.stringify(d.CreditCard)+'\n';
+      // Check for Transactions array
+      if(d.Transactions) html += 'Transactions[0]: '+JSON.stringify(d.Transactions[0]||{})+'\n';
+      // Show all top-level keys with values
+      for(var key in d){
+        if(key!=='CreditCard'&&key!=='Transactions'){
+          html += key+': '+JSON.stringify(d[key])+'\n';
+        }
+      }
+    } else {
+      html += r.raw+'\n';
+    }
+    html += '\n';
+  });
+  p.textContent = html;
+  p.style.display = 'block';
 }
 
 // Map GET /api/transactions/{id} response to LAST.
