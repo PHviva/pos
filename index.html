@@ -855,10 +855,10 @@ function applyTx(p, knownAmt){
 function fetchTxDetails(transactionId, callback){
   if(!transactionId){ callback(null); return; }
   var auth = 'Basic ' + btoa(MID + ':' + AKEY);
-  var results = {}, count = 0;
+  var results = {}, count = 0, total = 3;
   function done(key, data){
     if(data) results[key] = data;
-    if(++count === 2) callback(Object.keys(results).length ? results : null);
+    if(++count === total) callback(Object.keys(results).length ? results : null);
   }
   function get(key, url){
     var x = new XMLHttpRequest();
@@ -867,16 +867,26 @@ function fetchTxDetails(transactionId, callback){
     x.timeout = 8000;
     x.onreadystatechange = function(){
       if(x.readyState !== 4) return;
-      try{ done(key, x.status===200 ? JSON.parse(x.responseText) : null); }
-      catch(e){ done(key, null); }
+      var parsed = null;
+      if(x.status === 200){
+        try{ parsed = JSON.parse(x.responseText); }catch(e){}
+      }
+      console.log('[Viva '+key+'] status='+x.status+' body='+x.responseText.slice(0,300));
+      done(key, parsed);
     };
-    x.onerror = x.ontimeout = function(){ done(key, null); };
+    x.onerror = x.ontimeout = function(){
+      console.log('[Viva '+key+'] error/timeout');
+      done(key, null);
+    };
     x.send();
   }
-  // OLD API: has CreditCard.IssuingBank, CreditCard.CardCountryCode
+  // Three endpoints to maximise chances of getting IssuingBank
+  // 1. OLD endpoint — may return CreditCard.IssuingBank
   get('old', 'https://api.vivapayments.com/api/transactions/' + transactionId);
-  // v2 API: has cardIssuingBank (sometimes populated), cardCountryCode
+  // 2. v2 checkout — may return cardIssuingBank
   get('v2',  'https://api.vivapayments.com/checkout/v2/transactions/' + transactionId);
+  // 3. OLD list endpoint with transactionId param — alternate format
+  get('list','https://api.vivapayments.com/api/transactions?transactionId=' + transactionId);
 }
 
 // Map GET /api/transactions/{id} response to LAST.
@@ -888,43 +898,66 @@ function fetchTxDetails(transactionId, callback){
 function applyApiTx(res){
   if(!res) return;
   var prev = LAST || {};
-  // res peut être {old:..., v2:...} (dual) ou directement un objet (legacy)
-  var d  = res.old || res || {};   // OLD API response
-  var d2 = res.v2  || {};          // v2 API response
-  var cc = d.CreditCard || {};     // CreditCard object in OLD API
 
-  // IssuingBank comes from CreditCard.IssuingBank
-  var issuingBank = cc.IssuingBank || cc.issuingBank || d.CardIssuingBank || d2.cardIssuingBank || prev.cardIssuingBank || '';
-  var countryCode = cc.CardCountryCode || cc.cardCountryCode || d.CardCountryCode || d2.cardCountryCode || prev.cardCountryCode || '';
+  // Handle list response from /api/transactions?transactionId=xxx
+  // which returns { Transactions: [...] }
+  var listTx = null;
+  if(res.list){
+    var lst = res.list;
+    if(lst && lst.Transactions && lst.Transactions.length > 0) listTx = lst.Transactions[0];
+    else if(Array.isArray(lst) && lst.length > 0) listTx = lst[0];
+  }
+
+  var d  = res.old  || {};    // /api/transactions/{id}  — may have CreditCard
+  var d2 = res.v2   || {};    // /checkout/v2            — may have cardIssuingBank
+  var dl = listTx   || {};    // list endpoint            — may have CreditCard
+
+  // CreditCard nested object (from OLD or list endpoints)
+  var cc  = d.CreditCard  || dl.CreditCard  || {};
+
+  // IssuingBank: try every possible location
+  var issuingBank =
+    cc.IssuingBank          ||   // CreditCard.IssuingBank (OLD)
+    cc.issuingBank          ||
+    dl.CardIssuingBank      ||   // list endpoint top-level
+    d.CardIssuingBank       ||   // old endpoint top-level
+    d2.cardIssuingBank      ||   // v2 endpoint
+    prev.cardIssuingBank    || '';
+
+  var countryCode =
+    cc.CardCountryCode      ||
+    cc.cardCountryCode      ||
+    dl.CardCountryCode      ||
+    d.CardCountryCode       ||
+    d2.cardCountryCode      ||
+    prev.cardCountryCode    || '';
+
+  // Merge all sources, prefer OLD/list for POS-specific fields
+  var merged = Object.assign({}, d2, dl, d);  // d wins over dl wins over d2
 
   LAST = {
-    transactionId:   d.TransactionId        || prev.transactionId   || '',
-    amount:          d.Amount               || prev.amount           || 0,
-    tipAmount:       d.TipAmount            || 0,
-    statusRaw:       d.StatusId === 'F'     ? 'success' : (prev.statusRaw || 'success'),
-    statusId:        d.StatusId             || prev.statusId         || 'F',
-    message:         d.Message              || prev.message          || '',
-    cardNumber:      cc.CardNumber          || d.CardNumber          || prev.cardNumber || '',
-    cardTypeName:    d.CardType             || d.BankId              || prev.cardTypeName || '',
-    panEntryMode:    d.PanEntryMode != null ? String(d.PanEntryMode) : (prev.panEntryMode || ''),
-    typeId:          String(d.TransactionTypeId || prev.typeId       || '5'),
-    transactionDate: d.InsDate              || prev.transactionDate  || '',
-    orderCode:       String(d.OrderCode     || prev.orderCode        || ''),
-    authorizationId: d.AuthorizationId      || prev.authorizationId  || '',
-    referenceNumber: d.RetrievalReferenceNumber || prev.referenceNumber || '',
-    rrn:             d.RetrievalReferenceNumber || prev.rrn           || '',
-    terminalId:      String(d.TerminalId    || prev.terminalId       || ''),
-    sourceCode:      String(d.SourceCode    || prev.sourceCode       || SRC),
-    eventId:         String(d.EventId       || prev.eventId          || '0'),
-    aid:             d.ApplicationIdentifier|| prev.aid              || '',
-    cardIssuingBank: issuingBank || d2.cardIssuingBank || '',
-    cardCountryCode: countryCode || d2.cardCountryCode || ''
+    transactionId:   merged.TransactionId    || d2.transactionId   || prev.transactionId   || '',
+    amount:          merged.Amount           || d2.amount          || prev.amount           || 0,
+    tipAmount:       merged.TipAmount        || 0,
+    statusRaw:       (merged.StatusId==='F'||d2.statusId==='F') ? 'success' : (prev.statusRaw||'success'),
+    statusId:        merged.StatusId         || d2.statusId        || prev.statusId         || 'F',
+    message:         merged.Message          || d2.message         || prev.message          || '',
+    cardNumber:      cc.CardNumber           || merged.CardNumber  || d2.cardNumber || prev.cardNumber || '',
+    cardTypeName:    merged.CardType         || merged.BankId      || d2.cardType   || prev.cardTypeName || '',
+    panEntryMode:    merged.PanEntryMode != null ? String(merged.PanEntryMode) : (prev.panEntryMode||''),
+    typeId:          String(merged.TransactionTypeId || d2.transactionTypeId || prev.typeId || '5'),
+    transactionDate: merged.InsDate          || d2.insDate         || prev.transactionDate  || '',
+    orderCode:       String(merged.OrderCode || d2.orderCode       || prev.orderCode        || ''),
+    authorizationId: merged.AuthorizationId  || d2.authorizationId || prev.authorizationId  || '',
+    referenceNumber: merged.RetrievalReferenceNumber || d2.retrievalReferenceNumber || prev.referenceNumber || '',
+    rrn:             merged.RetrievalReferenceNumber || d2.retrievalReferenceNumber || prev.rrn || '',
+    terminalId:      String(merged.TerminalId|| d2.terminalId      || prev.terminalId       || ''),
+    sourceCode:      String(merged.SourceCode|| d2.sourceCode      || prev.sourceCode       || SRC),
+    eventId:         String(merged.EventId   || d2.eventId         || prev.eventId          || '0'),
+    aid:             merged.ApplicationIdentifier || d2.applicationIdentifier || prev.aid   || '',
+    cardIssuingBank: issuingBank,
+    cardCountryCode: countryCode
   };
-  try{
-    console.log('[Viva API response]', JSON.stringify(d));
-    // Store raw response for display on receipt
-    LAST._apiRaw = 'old:'+JSON.stringify(d).slice(0,150)+' | v2:'+JSON.stringify(d2).slice(0,150);
-  }catch(e){}
   saveLast(); updateBar();
 }
 
