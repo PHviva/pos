@@ -848,55 +848,67 @@ function applyTx(p, knownAmt){
   return LAST;
 }
 
-// ── REST API — fetch transaction details (works on https://) ───────────────
+// ── REST API ─────────────────────────────────────────────────────────────────
+// Endpoint: GET /api/transactions/{id}  (Transactions OLD — Basic Auth)
+// Response includes a "CreditCard" object with IssuingBank + CardCountryCode.
+// This is the only Viva endpoint that reliably returns IssuingBank for POS.
 function fetchTxDetails(transactionId, callback){
-  var url = 'https://api.vivapayments.com/api/transactions/' + transactionId;
+  if(!transactionId){ callback(null); return; }
   var xhr = new XMLHttpRequest();
-  xhr.open('GET', url, true);
+  xhr.open('GET', 'https://api.vivapayments.com/api/transactions/' + transactionId, true);
   xhr.setRequestHeader('Authorization', 'Basic ' + btoa(MID + ':' + AKEY));
   xhr.timeout = 8000;
   xhr.onreadystatechange = function(){
     if(xhr.readyState !== 4) return;
     if(xhr.status === 200){
-      try { callback(JSON.parse(xhr.responseText)); return; } catch(e){}
+      try{ callback(JSON.parse(xhr.responseText)); return; }catch(e){}
     }
-    log('API erreur '+xhr.status, 'warn');
+    log('API erreur ' + xhr.status, 'warn');
     callback(null);
   };
-  xhr.onerror = function(){ callback(null); };
-  xhr.ontimeout = function(){ callback(null); };
+  xhr.onerror = xhr.ontimeout = function(){ callback(null); };
   xhr.send();
 }
 
-// Map REST API response (PascalCase) to our LAST fields
+// Map GET /api/transactions/{id} response to LAST.
+// Key fields from the "Transactions OLD" response:
+//   TransactionId, Amount, StatusId, InsDate, OrderCode, SourceCode,
+//   TerminalId, AuthorizationId, RetrievalReferenceNumber, PanEntryMode,
+//   ApplicationIdentifier, TransactionTypeId, EventId
+//   CreditCard: { CardNumber, CardCountryCode, IssuingBank, ... }
 function applyApiTx(d){
   if(!d) return;
   var prev = LAST || {};
+  var cc   = d.CreditCard || {};   // Nested CreditCard object
+
+  // IssuingBank comes from CreditCard.IssuingBank
+  var issuingBank = cc.IssuingBank || cc.issuingBank || d.CardIssuingBank || prev.cardIssuingBank || '';
+  var countryCode = cc.CardCountryCode || cc.cardCountryCode || d.CardCountryCode || prev.cardCountryCode || '';
+
   LAST = {
-    transactionId:   d.TransactionId   || d.transactionId   || prev.transactionId   || '',
-    amount:          d.Amount          || d.amount          || prev.amount           || 0,
-    tipAmount:       d.tipAmount       || 0,
-    statusRaw:       (d.StatusId==='F'||d.statusId==='F') ? 'success' : 'fail',
-    statusId:        d.StatusId        || d.statusId        || prev.statusId         || 'F',
-    message:         d.message         || prev.message          || '',
-    cardNumber:      d.CardNumber      || d.cardNumber      || prev.cardNumber       || '',
-    cardTypeName:    d.CardType        || d.cardType        || d.bankId             || prev.cardTypeName || '',
-    panEntryMode:    (d.panEntryMode!=null&&String(d.panEntryMode)!==''&&String(d.panEntryMode)!=='0') ? String(d.panEntryMode) : (prev.panEntryMode || ''),
-    typeId:          String(d.TransactionTypeId || d.transactionTypeId || d.typeId  || prev.typeId || '5'),
-    transactionDate: d.InsDate         || d.insDate         || d.transactionDate    || prev.transactionDate || '',
-    orderCode:       String(d.OrderCode || d.orderCode       || prev.orderCode       || ''),
-    authorizationId: d.AuthorizationId || d.authorizationId || prev.authorizationId  || '',
-    referenceNumber: d.retrievalReferenceNumber || prev.referenceNumber || '',
-    rrn:             d.RetrievalReferenceNumber || d.retrievalReferenceNumber || prev.rrn || '',
-    terminalId:      String(d.TerminalId || d.terminalId   || prev.terminalId       || '16008507'),
-    sourceCode:      String(d.SourceCode || d.sourceCode   || prev.sourceCode       || SRC),
-    eventId:         String(d.EventId  || d.eventId        || prev.eventId          || '0'),
-    aid:             d.ApplicationIdentifier || d.applicationIdentifier || d.aid   || prev.aid || '',
-    cardIssuingBank: d.CardIssuingBank || d.cardIssuingBank || d.issuingBank || prev.cardIssuingBank || '',
-    cardCountryCode: d.CardCountryCode || d.cardCountryCode || prev.cardCountryCode || ''
+    transactionId:   d.TransactionId        || prev.transactionId   || '',
+    amount:          d.Amount               || prev.amount           || 0,
+    tipAmount:       d.TipAmount            || 0,
+    statusRaw:       d.StatusId === 'F'     ? 'success' : (prev.statusRaw || 'success'),
+    statusId:        d.StatusId             || prev.statusId         || 'F',
+    message:         d.Message              || prev.message          || '',
+    cardNumber:      cc.CardNumber          || d.CardNumber          || prev.cardNumber || '',
+    cardTypeName:    d.CardType             || d.BankId              || prev.cardTypeName || '',
+    panEntryMode:    d.PanEntryMode != null ? String(d.PanEntryMode) : (prev.panEntryMode || ''),
+    typeId:          String(d.TransactionTypeId || prev.typeId       || '5'),
+    transactionDate: d.InsDate              || prev.transactionDate  || '',
+    orderCode:       String(d.OrderCode     || prev.orderCode        || ''),
+    authorizationId: d.AuthorizationId      || prev.authorizationId  || '',
+    referenceNumber: d.RetrievalReferenceNumber || prev.referenceNumber || '',
+    rrn:             d.RetrievalReferenceNumber || prev.rrn           || '',
+    terminalId:      String(d.TerminalId    || prev.terminalId       || ''),
+    sourceCode:      String(d.SourceCode    || prev.sourceCode       || SRC),
+    eventId:         String(d.EventId       || prev.eventId          || '0'),
+    aid:             d.ApplicationIdentifier|| prev.aid              || '',
+    cardIssuingBank: issuingBank,
+    cardCountryCode: countryCode
   };
-  // Debug: log all API fields to console
-  try{console.log('[Viva API]',JSON.stringify(d));}catch(e){}
+  try{ console.log('[Viva API response]', JSON.stringify(d)); }catch(e){}
   saveLast(); updateBar();
 }
 
