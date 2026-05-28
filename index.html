@@ -743,6 +743,7 @@
   }
 })();
 
+var APP_VERSION = 'v1.0';
 var GITHUB_URL = 'https://phviva.github.io/pos/';
 var APP_ID     = 'com.vivawallet.posapp';
 var BASE       = 'vivapayclient://pay/v1';
@@ -1302,7 +1303,7 @@ function closeReceipt(){ document.getElementById('receiptOverlay').classList.rem
 window.addEventListener('DOMContentLoaded',function(){
   loadLast();
   if(LAST&&LAST.transactionId){ updateBar(); log('Session restauree - '+LAST.transactionId.slice(0,20),'info'); }
-  else { log('Pret - GDIMMO Production | '+GITHUB_URL,'info'); }
+  else { log('Pret - GDIMMO Production v1.0 | '+GITHUB_URL,'info'); }
 });
 window.addEventListener('pageshow',function(){ onReturn(); });
 document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') onReturn(); });
