@@ -989,7 +989,15 @@ function applyApiTx(res){
     aid:             merged.ApplicationIdentifier || d2.applicationIdentifier || prev.aid   || '',
     cardIssuingBank: issuingBank,
     cardCountryCode: countryCode,
-    digitalWalletId: d.DigitalWalletId != null ? Number(d.DigitalWalletId) : (prev.digitalWalletId||null)
+    digitalWalletId: (function(){
+      var v = merged.DigitalWalletId != null ? merged.DigitalWalletId
+            : dl.DigitalWalletId    != null ? dl.DigitalWalletId
+            : d2.digitalWalletId    != null ? d2.digitalWalletId
+            : null;
+      // Log for debugging
+      try{ log('DigitalWalletId='+JSON.stringify(v)+' | d='+JSON.stringify(d.DigitalWalletId)+' | dl='+JSON.stringify(dl.DigitalWalletId)+' | d2='+JSON.stringify(d2.digitalWalletId), 'info'); }catch(e){}
+      return v != null ? Number(v) : (prev.digitalWalletId||null);
+    })()
   };
   saveLast(); updateBar();
 }
@@ -1203,6 +1211,7 @@ function renderReceipt(){
       if(L.digitalWalletId===2)h+='<img src="'+IMG_APAY+'" style="height:24px;object-fit:contain" alt="Apple Pay">';
       else if(L.digitalWalletId===3)h+='<img src="'+IMG_GPAY+'" style="height:24px;object-fit:contain" alt="Google Pay">';
       h+='</div>';
+      if(L.digitalWalletId) h+='<div style="font-size:8px;color:#888;text-align:center">[walletId='+L.digitalWalletId+']</div>';
     } else if(chip){
       h+='<img src="'+IMG_CARDINSERT+'" style="height:26px;object-fit:contain;filter:brightness(0);opacity:.7;display:block;margin:0 auto" alt="">';
     }
