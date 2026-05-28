@@ -858,17 +858,13 @@ function applyTx(p, knownAmt){
 function fetchTxDetails(transactionId, callback){
   if(!transactionId){ callback(null); return; }
   var auth = 'Basic ' + btoa(MID + ':' + AKEY);
-  var results = {}, count = 0, total = 3;
+  var done = 0;
+  var results = {};
 
-  function done(key, data, raw){
-    results[key] = {data: data, raw: raw, status: data?'OK':'FAIL'};
-    if(++count === total){
-      // Show raw responses in debug panel
-      showDebug(results);
-      var merged = {};
-      for(var k in results){ if(results[k].data) merged[k] = results[k].data; }
-      callback(Object.keys(merged).length ? merged : null);
-    }
+  function finish(){
+    // Always call back — even if all failed — so receipt always shows
+    log('API: old='+( results.old?'OK':'fail')+' v2='+(results.v2?'OK':'fail'), 'info');
+    callback(Object.keys(results).length ? results : null);
   }
 
   function get(key, url){
@@ -878,18 +874,26 @@ function fetchTxDetails(transactionId, callback){
     x.timeout = 8000;
     x.onreadystatechange = function(){
       if(x.readyState !== 4) return;
-      var parsed = null, raw = x.responseText.slice(0,500);
-      if(x.status === 200){ try{ parsed = JSON.parse(x.responseText); }catch(e){} }
-      done(key, parsed, 'HTTP '+x.status+': '+raw);
+      log('API '+key+' HTTP '+x.status+(x.status===200?'':' body='+x.responseText.slice(0,80)), x.status===200?'info':'warn');
+      if(x.status === 200){
+        try{ results[key] = JSON.parse(x.responseText); }catch(e){}
+      }
+      if(++done === 2) finish();
     };
-    x.onerror   = function(){ done(key, null, 'NETWORK ERROR'); };
-    x.ontimeout = function(){ done(key, null, 'TIMEOUT'); };
+    x.onerror = function(){
+      log('API '+key+' network error','warn');
+      if(++done === 2) finish();
+    };
+    x.ontimeout = function(){
+      log('API '+key+' timeout','warn');
+      if(++done === 2) finish();
+    };
     x.send();
   }
 
-  get('old',  'https://api.vivapayments.com/api/transactions/' + transactionId);
-  get('v2',   'https://api.vivapayments.com/checkout/v2/transactions/' + transactionId);
-  get('list', 'https://api.vivapayments.com/api/transactions?transactionId=' + transactionId);
+  // Only 2 calls — simpler, guaranteed to finish
+  get('old', 'https://api.vivapayments.com/api/transactions/'  + transactionId);
+  get('v2',  'https://api.vivapayments.com/checkout/v2/transactions/' + transactionId);
 }
 
 function showDebug(results){
@@ -933,16 +937,9 @@ function applyApiTx(res){
 
   // Handle list response from /api/transactions?transactionId=xxx
   // which returns { Transactions: [...] }
-  var listTx = null;
-  if(res.list){
-    var lst = res.list;
-    if(lst && lst.Transactions && lst.Transactions.length > 0) listTx = lst.Transactions[0];
-    else if(Array.isArray(lst) && lst.length > 0) listTx = lst[0];
-  }
-
-  var d  = res.old  || {};    // /api/transactions/{id}  — may have CreditCard
-  var d2 = res.v2   || {};    // /checkout/v2            — may have cardIssuingBank
-  var dl = listTx   || {};    // list endpoint            — may have CreditCard
+  var d  = res.old || {};   // /api/transactions/{id} — CreditCard, DigitalWalletId
+  var d2 = res.v2  || {};   // /checkout/v2           — cardIssuingBank, cardCountryCode
+  var dl = {};
 
   // CreditCard nested object (from OLD or list endpoints)
   var cc  = d.CreditCard  || dl.CreditCard  || {};
