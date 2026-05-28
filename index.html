@@ -744,7 +744,7 @@
   }
 })();
 
-var APP_VERSION = 'v1.3';
+var APP_VERSION = 'v1.5';
 var GITHUB_URL = 'https://phviva.github.io/pos/';
 var APP_ID     = 'com.vivawallet.posapp';
 var BASE       = 'vivapayclient://pay/v1';
@@ -845,12 +845,46 @@ function applyTx(p, knownAmt){
     eventId:         p.transactionEventId || prev.eventId        || '0',
     aid:             p.aid              || prev.aid              || '',
     paymentMethod:   p.paymentMethod    || prev.paymentMethod    || '',
-    cardIssuingBank: p.issuingBank || p.cardIssuingBank || prev.cardIssuingBank || '',
+    cardIssuingBank: p.issuingBank || p.cardIssuingBank || (p.bankId?p.bankId.replace(/_/g,' '):'') || prev.cardIssuingBank || '',
     cardCountryCode: p.cardCountryCode || prev.cardCountryCode || '',
+    walletType:      p.paymentMethod || prev.walletType || '',
+    digitalWalletId: (p.paymentMethod==='APPLE_PAY') ? 2 : (p.paymentMethod==='GOOGLE_PAY') ? 3 : (prev.digitalWalletId||null),
     digitalWalletId: p.digitalWalletId != null ? Number(p.digitalWalletId) : (prev.digitalWalletId||null)
   };
   saveLast(); updateBar();
   return LAST;
+}
+
+// ── GITHUB ACTIONS PROXY ────────────────────────────────────────────────────
+var GH_TOKEN=(function(){try{return localStorage.getItem('gh_token')||'';}catch(e){return '';}})();
+function triggerAndPoll(txId,cb){
+  var x=new XMLHttpRequest();
+  x.open('POST','https://api.github.com/repos/'+GH_USER+'/'+GH_REPO+'/dispatches',true);
+  x.setRequestHeader('Authorization','token '+GH_TOKEN);
+  x.setRequestHeader('Accept','application/vnd.github.v3+json');
+  x.setRequestHeader('Content-Type','application/json');
+  x.timeout=8000;
+  x.onreadystatechange=function(){
+    if(x.readyState!==4)return;
+    log('GH dispatch HTTP '+x.status,x.status===204?'info':'warn');
+    if(x.status===204)pollResult(txId,0,cb);
+    else{log('Dispatch failed','warn');cb(null);}
+  };
+  x.onerror=x.ontimeout=function(){cb(null);};
+  x.send(JSON.stringify({event_type:'fetch-tx',client_payload:{txId:txId,mid:'7079358c-fc1f-4c95-a7b0-5a72493c3e29',akey:'9p1XW3STeLu40jatWwwLJf124PX3eD'}}));;
+}
+function pollResult(txId,n,cb){
+  if(n>=12){log('Poll timeout','warn');cb(null);return;}
+  setTimeout(function(){
+    var url='https://raw.githubusercontent.com/'+GH_USER+'/'+GH_REPO+'/main/data/'+txId+'.json?_='+Date.now();
+    var x=new XMLHttpRequest();x.open('GET',url,true);x.timeout=5000;
+    x.onreadystatechange=function(){
+      if(x.readyState!==4)return;
+      if(x.status===200){try{cb(JSON.parse(x.responseText));log('API data OK','success');return;}catch(e){}}
+      log('Poll '+(n+1)+'/12','info');pollResult(txId,n+1,cb);
+    };
+    x.onerror=x.ontimeout=function(){pollResult(txId,n+1,cb);};x.send();
+  },3000);
 }
 
 // ── REST API ─────────────────────────────────────────────────────────────────
@@ -1024,13 +1058,12 @@ function onReturn(){
     var allKeys = Object.keys(p).join(', ');
     log('Callback params: '+allKeys, 'info');
     if(p.digitalWalletId!=null) log('walletId='+p.digitalWalletId,'info');
-    if(p.paymentMethod!=null)   log('paymentMethod='+p.paymentMethod,'info');
+    log('paymentMethod='+p.paymentMethod+' | bankId='+p.bankId,'info');
     if(ok && LAST.transactionId){
-      // Enrich with REST API for complete data
       showSpinner('Enrichissement...');
-      fetchTxDetails(LAST.transactionId, function(d){
+      triggerAndPoll(LAST.transactionId, function(apiData){
         hideSpinner();
-        if(d) applyApiTx(d);
+        if(apiData) applyApiTx(apiData);
         setTimeout(renderReceipt, 200);
       });
     } else if(ok){
@@ -1212,8 +1245,10 @@ function renderReceipt(){
     if(ctless){
       h+='<div style="display:flex;align-items:center;justify-content:center;gap:8px">';
       h+='<img src="'+IMG_CONTACTLESS+'" style="height:36px;object-fit:contain" alt="">';
-      if(L.digitalWalletId===2)h+='<img src="'+IMG_APAY+'" style="height:24px;object-fit:contain" alt="Apple Pay">';
-      else if(L.digitalWalletId===3)h+='<img src="'+IMG_GPAY+'" style="height:24px;object-fit:contain" alt="Google Pay">';
+      var isApple=(L.digitalWalletId===2)||(L.walletType&&L.walletType.toUpperCase().indexOf('APPLE')!==-1);
+      var isGoogle=(L.digitalWalletId===3)||(L.walletType&&L.walletType.toUpperCase().indexOf('GOOGLE')!==-1);
+      if(isApple)h+='<img src="'+IMG_APAY+'" style="height:24px;object-fit:contain" alt="Apple Pay">';
+      else if(isGoogle)h+='<img src="'+IMG_GPAY+'" style="height:24px;object-fit:contain" alt="Google Pay">';
       h+='</div>';
       if(L.digitalWalletId) h+='<div style="font-size:8px;color:#888;text-align:center">[walletId='+L.digitalWalletId+']</div>';
     } else if(chip){
@@ -1248,6 +1283,7 @@ function renderReceipt(){
     ['Approbation acqu.',    ok?'✓ Approuvé':'× Refusé'],
     ['Event ID',             L.eventId||'0'],
     ['Type de carte',        cardName],
+    ['Wallet',               L.walletType&&L.walletType!=='CARD_PRESENT'?L.walletType.replace(/_/g,' '):null],
     ['Devise',               'EUR (EUR)'],
     ['Type opération',  type+' (typeId:'+typeNum+')'],
     ['StatusId',             statusDisp],
@@ -1309,7 +1345,7 @@ function closeReceipt(){ document.getElementById('receiptOverlay').classList.rem
 window.addEventListener('DOMContentLoaded',function(){
   loadLast();
   if(LAST&&LAST.transactionId){ updateBar(); log('Session restauree - '+LAST.transactionId.slice(0,20),'info'); }
-  else { log('Pret - GDIMMO Production v1.3 | '+GITHUB_URL,'info'); }
+  else { log('Pret - GDIMMO Production v1.5 | '+GITHUB_URL,'info'); }
 });
 window.addEventListener('pageshow',function(){ onReturn(); });
 document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') onReturn(); });
