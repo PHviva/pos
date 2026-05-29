@@ -628,7 +628,7 @@
       <img id="vivaLogoHeader" alt="Viva.com">
       <div class="header-divider"></div>
       <span class="header-merchant">GDIMMO</span>
-      <span style="font-size:10px;color:#7a8fa6;font-weight:600;letter-spacing:.04em;margin-left:2px">v1.8</span>
+      <span style="font-size:10px;color:#7a8fa6;font-weight:600;letter-spacing:.04em;margin-left:2px">v1.9</span>
     </div>
     <div class="header-status">
       <div class="status-dot"></div>
@@ -744,7 +744,7 @@
   }
 })();
 
-var APP_VERSION = 'v1.8';
+var APP_VERSION = 'v1.9';
 var GITHUB_URL = 'https://phviva.github.io/pos/';
 var APP_ID     = 'com.vivawallet.posapp';
 var BASE       = 'vivapayclient://pay/v1';
@@ -831,7 +831,8 @@ function applyTx(p, knownAmt){
     statusId:        (p.status==='success'||(!p.status&&prev.statusId==='F')) ? 'F' : (p.status==='fail'?'A':'F'),
     message:         p.message          || prev.message         || '',
     cardNumber:      p.accountNumber    || prev.cardNumber      || '',
-    cardTypeName:    p.cardType         || prev.cardTypeName     || '',
+    cardTypeName:    p.cardType || prev.cardTypeName || '',
+    bankId:          p.bankId || prev.bankId || '',
     panEntryMode:    p.verificationMethod || prev.panEntryMode   || '',
     typeId:          p.action           || prev.typeId           || 'sale',
     transactionDate: p.transactionDate  || prev.transactionDate  || new Date().toISOString(),
@@ -860,44 +861,46 @@ function applyTx(p, knownAmt){
 // Response includes a "CreditCard" object with IssuingBank + CardCountryCode.
 // This is the only Viva endpoint that reliably returns IssuingBank for POS.
 function fetchTxDetails(transactionId, callback){
-  if(!transactionId){ callback(null); return; }
-  var auth = 'Basic ' + btoa(MID + ':' + AKEY);
-  var done = 0;
-  var results = {};
-
-  function finish(){
-    // Always call back — even if all failed — so receipt always shows
-    log('API: old='+( results.old?'OK':'fail')+' v2='+(results.v2?'OK':'fail'), 'info');
-    callback(Object.keys(results).length ? results : null);
-  }
-
-  function get(key, url){
-    var x = new XMLHttpRequest();
-    x.open('GET', url, true);
-    x.setRequestHeader('Authorization', auth);
-    x.timeout = 8000;
-    x.onreadystatechange = function(){
-      if(x.readyState !== 4) return;
-      log('API '+key+' HTTP '+x.status+(x.status===200?'':' body='+x.responseText.slice(0,80)), x.status===200?'info':'warn');
-      if(x.status === 200){
-        try{ results[key] = JSON.parse(x.responseText); }catch(e){}
-      }
-      if(++done === 2) finish();
+  if(!transactionId){callback(null);return;}
+  // Cloudflare Worker proxy — no CORS restrictions
+  var proxyUrl = 'https://viva-proxy.gdimmo.workers.dev/api/transactions/' + transactionId;
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', proxyUrl, true);
+  xhr.timeout = 8000;
+  xhr.onreadystatechange = function(){
+    if(xhr.readyState!==4)return;
+    log('Proxy HTTP '+xhr.status, xhr.status===200?'info':'warn');
+    if(xhr.status===200){
+      try{callback(JSON.parse(xhr.responseText));return;}catch(e){}
+    }
+    // Fallback: direct API (may fail due to CORS)
+    var xhr2=new XMLHttpRequest();
+    xhr2.open('GET','https://api.vivapayments.com/api/transactions/'+transactionId,true);
+    xhr2.setRequestHeader('Authorization','Basic '+btoa('7079358c-fc1f-4c95-a7b0-5a72493c3e29:9p1XW3STeLu40jatWwwLJf124PX3eD'));
+    xhr2.timeout=6000;
+    xhr2.onreadystatechange=function(){
+      if(xhr2.readyState!==4)return;
+      if(xhr2.status===200){try{callback(JSON.parse(xhr2.responseText));return;}catch(e){}}
+      callback(null);
     };
-    x.onerror = function(){
-      log('API '+key+' network error','warn');
-      if(++done === 2) finish();
+    xhr2.onerror=xhr2.ontimeout=function(){callback(null);};
+    xhr2.send();
+  };
+  xhr.onerror=xhr.ontimeout=function(){
+    // Fallback direct
+    var xhr2=new XMLHttpRequest();
+    xhr2.open('GET','https://api.vivapayments.com/api/transactions/'+transactionId,true);
+    xhr2.setRequestHeader('Authorization','Basic '+btoa('7079358c-fc1f-4c95-a7b0-5a72493c3e29:9p1XW3STeLu40jatWwwLJf124PX3eD'));
+    xhr2.timeout=6000;
+    xhr2.onreadystatechange=function(){
+      if(xhr2.readyState!==4)return;
+      if(xhr2.status===200){try{callback(JSON.parse(xhr2.responseText));return;}catch(e){}}
+      callback(null);
     };
-    x.ontimeout = function(){
-      log('API '+key+' timeout','warn');
-      if(++done === 2) finish();
-    };
-    x.send();
-  }
-
-  // Only 2 calls — simpler, guaranteed to finish
-  get('old', 'https://api.vivapayments.com/api/transactions/'  + transactionId);
-  get('v2',  'https://api.vivapayments.com/checkout/v2/transactions/' + transactionId);
+    xhr2.onerror=xhr2.ontimeout=function(){callback(null);};
+    xhr2.send();
+  };
+  xhr.send();
 }
 
 function showDebug(results){
@@ -1028,7 +1031,16 @@ function onReturn(){
     if(p.digitalWalletId!=null) log('walletId='+p.digitalWalletId,'info');
     log('paymentMethod='+p.paymentMethod+' | bankId='+p.bankId+' | cardType='+p.cardType,'info');
     if(ok && LAST.transactionId){
-      setTimeout(renderReceipt, 200);
+      if(LAST.transactionId){
+        showSpinner('Données API...');
+        fetchTxDetails(LAST.transactionId, function(data){
+          hideSpinner();
+          if(data) applyApiTx({old:data,v2:{}});
+          setTimeout(renderReceipt, 200);
+        });
+      } else {
+        setTimeout(renderReceipt, 200);
+      }
     } else if(ok){
       setTimeout(renderReceipt, 200);
     }
@@ -1104,9 +1116,10 @@ function doReceipt(){
 // ── RECEIPT HELPERS ──────────────────────────────────────────────────────
 function glLogo(t){
   var s=(t||'').toLowerCase();
+  var b=((LAST&&LAST.bankId)||'').toLowerCase();
   if(s.indexOf('cb')!==-1||s.indexOf('cartes bancaires')!==-1) return IMG_CB;
-  if(s.indexOf('mastercard')!==-1||s.indexOf('maestro')!==-1) return IMG_MC;
-  if(s.indexOf('visa')!==-1||s.indexOf('net_visa')!==-1) return IMG_VISA;
+  if(s.indexOf('mastercard')!==-1||s.indexOf('maestro')!==-1||b.indexOf('master')!==-1||b==='net_master') return IMG_MC;
+  if(s.indexOf('visa')!==-1||s.indexOf('net_visa')!==-1||b.indexOf('visa')!==-1) return IMG_VISA;
   var pan=(LAST&&LAST.cardNumber||'').replace(/[\s*X]/g,'');
   if(pan[0]==='4') return IMG_VISA;
   if(pan[0]==='5'||pan[0]==='2') return IMG_MC;
@@ -1247,6 +1260,7 @@ function renderReceipt(){
     ['Approbation acqu.',    ok?'✓ Approuvé':'× Refusé'],
     ['Event ID',             L.eventId||'0'],
     ['Type de carte',        cardName],
+    ['Wallet', L.digitalWalletId===2?'Apple Pay':L.digitalWalletId===3?'Google Pay':null],
     ['Devise',               'EUR (EUR)'],
     ['Type opération',  type+' (typeId:'+typeNum+')'],
     ['StatusId',             statusDisp],
@@ -1308,7 +1322,7 @@ function closeReceipt(){ document.getElementById('receiptOverlay').classList.rem
 window.addEventListener('DOMContentLoaded',function(){
   loadLast();
   if(LAST&&LAST.transactionId){ updateBar(); log('Session restauree - '+LAST.transactionId.slice(0,20),'info'); }
-  else { log('Pret - GDIMMO Production v1.8 | '+GITHUB_URL,'info'); }
+  else { log('Pret - GDIMMO Production v1.9 | '+GITHUB_URL,'info'); }
 });
 window.addEventListener('pageshow',function(){ onReturn(); });
 document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') onReturn(); });
