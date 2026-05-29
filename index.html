@@ -628,7 +628,7 @@
       <img id="vivaLogoHeader" alt="Viva.com">
       <div class="header-divider"></div>
       <span class="header-merchant">GDIMMO</span>
-      <span style="font-size:10px;color:#7a8fa6;font-weight:600;letter-spacing:.04em;margin-left:2px">v1.9</span>
+      <span style="font-size:10px;color:#7a8fa6;font-weight:600;letter-spacing:.04em;margin-left:2px">v2.0</span>
     </div>
     <div class="header-status">
       <div class="status-dot"></div>
@@ -744,7 +744,7 @@
   }
 })();
 
-var APP_VERSION = 'v1.9';
+var APP_VERSION = 'v2.0';
 var GITHUB_URL = 'https://phviva.github.io/pos/';
 var APP_ID     = 'com.vivawallet.posapp';
 var BASE       = 'vivapayclient://pay/v1';
@@ -846,7 +846,7 @@ function applyTx(p, knownAmt){
     eventId:         p.transactionEventId || prev.eventId        || '0',
     aid:             p.aid              || prev.aid              || '',
     paymentMethod:   p.paymentMethod    || prev.paymentMethod    || '',
-    cardIssuingBank: p.issuingBank || p.cardIssuingBank || prev.cardIssuingBank || '',
+    cardIssuingBank: p.issuingBank || p.cardIssuingBank || (prev.cardIssuingBank&&prev.cardIssuingBank.indexOf('NET_')===0?'':prev.cardIssuingBank) || '',
     cardCountryCode: p.cardCountryCode || prev.cardCountryCode || '',
     walletType:      p.paymentMethod || prev.walletType || '',
     digitalWalletId: (p.paymentMethod==='APPLE_PAY') ? 2 : (p.paymentMethod==='GOOGLE_PAY') ? 3 : (prev.digitalWalletId||null),
@@ -953,12 +953,11 @@ function applyApiTx(res){
 
   // IssuingBank: try every possible location
   var issuingBank =
-    cc.IssuingBank          ||   // CreditCard.IssuingBank (OLD)
+    cc.IssuingBank          ||
     cc.issuingBank          ||
-    dl.CardIssuingBank      ||   // list endpoint top-level
-    d.CardIssuingBank       ||   // old endpoint top-level
-    d2.cardIssuingBank      ||   // v2 endpoint
-    prev.cardIssuingBank    || '';
+    d.CardIssuingBank       ||
+    d2.cardIssuingBank      ||
+    (prev.cardIssuingBank&&prev.cardIssuingBank.indexOf('NET_')===0?'':prev.cardIssuingBank) || '';
 
   var countryCode =
     cc.CardCountryCode      ||
@@ -1036,10 +1035,10 @@ function onReturn(){
         fetchTxDetails(LAST.transactionId, function(data){
           hideSpinner();
           if(data) applyApiTx({old:data,v2:{}});
-          setTimeout(renderReceipt, 200);
+          renderReceipt();
         });
       } else {
-        setTimeout(renderReceipt, 200);
+        renderReceipt();
       }
     } else if(ok){
       setTimeout(renderReceipt, 200);
@@ -1177,7 +1176,9 @@ function glMask(p){
 }
 
 // ── RENDER RECEIPT ──────────────────────────────────────────────────────────
+var _rendering=false;
 function renderReceipt(){
+  if(_rendering)return; _rendering=true; setTimeout(function(){_rendering=false;},2000);
   var L = LAST || {};
   var ok = L.statusId==='F' || L.statusRaw==='success' || (!L.statusRaw&&!L.statusId);
   var pan       = glMask(L.cardNumber||'');
@@ -1322,7 +1323,7 @@ function closeReceipt(){ document.getElementById('receiptOverlay').classList.rem
 window.addEventListener('DOMContentLoaded',function(){
   loadLast();
   if(LAST&&LAST.transactionId){ updateBar(); log('Session restauree - '+LAST.transactionId.slice(0,20),'info'); }
-  else { log('Pret - GDIMMO Production v1.9 | '+GITHUB_URL,'info'); }
+  else { log('Pret - GDIMMO Production v2.0 | '+GITHUB_URL,'info'); }
 });
 window.addEventListener('pageshow',function(){ onReturn(); });
 document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') onReturn(); });
